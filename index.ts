@@ -432,40 +432,131 @@ async function run() {
     );
 
     // G3. ক্যাসকেড ডিলিট: ইউজার ডিলিট করলে সব ডাটা মুছে যাবে
+    /**
+     * G3. MASTER PURGE: Permanent deletion of a citizen and all linked artifacts
+     * URL: DELETE /api/admin/users/:id
+     */
     app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
       const userId = req.params.id;
 
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: 'Invalid Citizen ID' });
+      }
+
       try {
-        // ১. ইউজার অ্যাকাউন্ট ডিলিট
-        const userDelete = usersCollection.deleteOne({
-          _id: new ObjectId(userId),
-        });
+        /**
+         * Standard Parallel Deletion Strategy
+         * This hits all collections simultaneously for maximum speed.
+         */
+        const operations = [
+          // 1. Remove from User Collection
+          usersCollection.deleteOne({ _id: new ObjectId(userId) }),
 
-        // ২. এই ইউজারের সব প্রোডাক্ট ডিলিট (যেখানে seller.id এই ইউজার)
-        const productDelete = productsCollection.deleteMany({
-          'seller.id': userId,
-        });
+          // 2. Remove all gadgets listed by this user
+          productsCollection.deleteMany({ 'seller.id': userId }),
 
-        // ৩. এই ইউজারের সব ফেভারিট লিস্ট ডিলিট
-        const favDelete = favoritesCollection.deleteMany({ userId: userId });
+          // 3. Remove all wishlist entries created by this user
+          favoritesCollection.deleteMany({ userId: userId }),
 
-        // ৪. এই ইউজারের সব অর্ডার রিকোয়েস্ট ডিলিট (Buyer অথবা Seller হিসেবে)
-        const orderDelete = ordersCollection.deleteMany({
-          $or: [{ buyerId: userId }, { sellerId: userId }],
-        });
+          // 4. Remove all orders where user was either buyer or seller
+          ordersCollection.deleteMany({
+            $or: [{ buyerId: userId }, { sellerId: userId }],
+          }),
+        ];
 
-        // সব অপারেশন একসাথে চালানো (Performance Optimization)
-        await Promise.all([userDelete, productDelete, favDelete, orderDelete]);
+        // Trigger all delete commands in parallel
+        const results = await Promise.all(operations);
+
+        // Calculating total records erased for logs
+        const totalErased = results.reduce(
+          (acc, curr) => acc + (curr.deletedCount || 0),
+          0,
+        );
 
         res.send({
           success: true,
-          message: 'User and all associated archives purged!',
+          message: `Master purge successful. ${totalErased} records erased from sanctuary logs.`,
+          details: {
+            userAccount: results[0].deletedCount,
+            gadgets: results[1].deletedCount,
+            wishlist: results[2].deletedCount,
+            orders: results[3].deletedCount,
+          },
         });
       } catch (error) {
-        res.status(500).send({ message: 'Master purge failed' });
+        console.error('Purge Protocol Failure:', error);
+        res
+          .status(500)
+          .send({ message: 'Critical failure during master purge' });
       }
     });
 
+    /**
+     * H. ADMIN: PRODUCT MANAGEMENT ROUTES
+     */
+
+    // H1. Get all products for Admin (No user filtering)
+    app.get('/api/admin/products', async (req: Request, res: Response) => {
+      try {
+        const result = await productsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Admin protocol failed' });
+      }
+    });
+
+    // H2. Approve Product (Pending -> Approved)
+    app.patch(
+      '/api/admin/products/approve/:id',
+      async (req: Request, res: Response) => {
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: 'approved' } },
+        );
+        res.send(result);
+      },
+    );
+
+    // H3. Toggle Featured Status
+    app.patch(
+      '/api/admin/products/feature/:id',
+      async (req: Request, res: Response) => {
+        const id = req.params.id;
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isFeatured: !product?.isFeatured } },
+        );
+        res.send(result);
+      },
+    );
+
+    // H4. Master Product Purge (Cascade Deletion)
+    app.delete(
+      '/api/admin/products/:id',
+      async (req: Request, res: Response) => {
+        const productId = req.params.id;
+        try {
+          const operations = [
+            productsCollection.deleteOne({ _id: new ObjectId(productId) }), // Remove product
+            favoritesCollection.deleteMany({ productId: productId }), // Clear wishlists
+            ordersCollection.deleteMany({ productId: productId }), // Clear order requests
+          ];
+          await Promise.all(operations);
+          res.send({
+            success: true,
+            message: 'Artifact and all linked logs destroyed',
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Product purge failed' });
+        }
+      },
+    );
     
   } catch (error) {
     console.error('Critical Database Error:', error);
