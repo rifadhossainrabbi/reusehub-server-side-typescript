@@ -329,6 +329,30 @@ async function run() {
       }
     });
 
+    // ১. ইউজার প্রোফাইল আপডেট করার API
+    app.patch('/api/users/:id', async (req: Request, res: Response) => {
+      try {
+        const id = req.params.id;
+        const { name, image } = req.body;
+
+        // Better Auth ডিফল্টভাবে 'user' কালেকশন ব্যবহার করে
+        const result = await db
+          .collection('user')
+          .updateOne({ _id: new ObjectId(id) }, { $set: { name, image } });
+
+        if (result.modifiedCount > 0) {
+          res.send({
+            success: true,
+            message: 'Profile updated in sanctuary logs',
+          });
+        } else {
+          res.status(400).send({ message: 'No changes detected' });
+        }
+      } catch (error) {
+        res.status(500).send({ message: 'Update failed' });
+      }
+    });
+
     
   } catch (error) {
     console.error('Critical initialization error:', error);
