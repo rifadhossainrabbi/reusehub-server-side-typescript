@@ -34,9 +34,7 @@ async function run() {
     console.log('--- REUSEHUB: ALL SYSTEMS SYNCHRONIZED ---');
 
     /**
-     * -------------------------------------------------------------------------
      * A. PRODUCT MANAGEMENT ROUTES
-     * -------------------------------------------------------------------------
      */
 
     // A1. Create a New Gadget listing
@@ -128,9 +126,7 @@ async function run() {
     });
 
     /**
-     * -------------------------------------------------------------------------
      * B. FAVORITE (WISHLIST) SYSTEM
-     * -------------------------------------------------------------------------
      */
 
     // B1. Toggle Favorite (Add/Remove) with Counter logic
@@ -202,9 +198,7 @@ async function run() {
     });
 
     /**
-     * -------------------------------------------------------------------------
      * C. ORDER (PURCHASE REQUEST) SYSTEM
-     * -------------------------------------------------------------------------
      */
 
     app.post('/api/orders', async (req: Request, res: Response) => {
@@ -413,6 +407,66 @@ async function run() {
         res.status(500).send({ message: 'Protocol sync failed during update' });
       }
     });
+
+    /**
+     * G. ADMIN: USER MANAGEMENT ROUTES
+     */
+
+    // G1. সব ইউজার গেট করার API
+    app.get('/api/admin/users', async (req: Request, res: Response) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
+
+    // G2. ইউজারকে এডমিন বানানোর API
+    app.patch(
+      '/api/admin/users/make-admin/:id',
+      async (req: Request, res: Response) => {
+        const id = req.params.id;
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role: 'admin' } },
+        );
+        res.send(result);
+      },
+    );
+
+    // G3. ক্যাসকেড ডিলিট: ইউজার ডিলিট করলে সব ডাটা মুছে যাবে
+    app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
+      const userId = req.params.id;
+
+      try {
+        // ১. ইউজার অ্যাকাউন্ট ডিলিট
+        const userDelete = usersCollection.deleteOne({
+          _id: new ObjectId(userId),
+        });
+
+        // ২. এই ইউজারের সব প্রোডাক্ট ডিলিট (যেখানে seller.id এই ইউজার)
+        const productDelete = productsCollection.deleteMany({
+          'seller.id': userId,
+        });
+
+        // ৩. এই ইউজারের সব ফেভারিট লিস্ট ডিলিট
+        const favDelete = favoritesCollection.deleteMany({ userId: userId });
+
+        // ৪. এই ইউজারের সব অর্ডার রিকোয়েস্ট ডিলিট (Buyer অথবা Seller হিসেবে)
+        const orderDelete = ordersCollection.deleteMany({
+          $or: [{ buyerId: userId }, { sellerId: userId }],
+        });
+
+        // সব অপারেশন একসাথে চালানো (Performance Optimization)
+        await Promise.all([userDelete, productDelete, favDelete, orderDelete]);
+
+        res.send({
+          success: true,
+          message: 'User and all associated archives purged!',
+        });
+      } catch (error) {
+        res.status(500).send({ message: 'Master purge failed' });
+      }
+    });
+
+    
   } catch (error) {
     console.error('Critical Database Error:', error);
   }
