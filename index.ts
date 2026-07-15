@@ -1018,6 +1018,41 @@ async function run() {
       },
     );
 
+    // ১. টপ কন্ট্রিবিউটর (Merchants) পাওয়ার API
+    app.get('/api/home/top-merchants', async (req: Request, res: Response) => {
+      try {
+        const topUsers = await productsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: '$seller.id',
+                name: { $first: '$seller.name' },
+                image: { $first: '$seller.image' },
+                count: { $sum: 1 },
+              },
+            },
+            { $sort: { count: -1 } },
+            { $limit: 4 }, // টপ ৪ জন
+          ])
+          .toArray();
+        res.send(topUsers);
+      } catch (error) {
+        res.status(500).send({ message: 'Failed to fetch merchants' });
+      }
+    });
+
+    // ২. গ্লোবাল মার্কেট স্ট্যাটস API
+    app.get('/api/home/market-stats', async (req: Request, res: Response) => {
+      try {
+        const users = await usersCollection.countDocuments();
+        const products = await productsCollection.countDocuments();
+        const orders = await db.collection('orders').countDocuments();
+        res.send({ users, products, orders });
+      } catch (error) {
+        res.status(500).send({ message: 'Stats error' });
+      }
+    });
+
     // Add this to your index.ts under "A. PRODUCT MANAGEMENT ROUTES"
   } catch (error) {
     console.error('Critical Database Error:', error);
