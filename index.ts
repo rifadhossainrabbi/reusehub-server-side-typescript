@@ -115,19 +115,23 @@ async function run() {
      */
 
     // A1. Create a New Gadget listing
-    app.post('/api/products',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const product = {
-          ...req.body,
-          favoriteCount: 0,
-          createdAt: new Date(),
-        };
-        const result = await productsCollection.insertOne(product);
-        res.status(201).send(result);
-      } catch (error) {
-        res.status(500).send({ message: 'Error archiving gadget' });
-      }
-    });
+    app.post(
+      '/api/products',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const product = {
+            ...req.body,
+            favoriteCount: 0,
+            createdAt: new Date(),
+          };
+          const result = await productsCollection.insertOne(product);
+          res.status(201).send(result);
+        } catch (error) {
+          res.status(500).send({ message: 'Error archiving gadget' });
+        }
+      },
+    );
 
     // A2. Browse Artifacts (Explore Page - Search, Filter, Sort, Pagination)
     app.get('/api/products', async (req: Request, res: Response) => {
@@ -186,7 +190,8 @@ async function run() {
      * D. USER SPECIFIC ANALYTICS (Atomic Aggregation)
      */
     app.get(
-      '/api/dashboard/user-intel/:userId',verifyToken,
+      '/api/dashboard/user-intel/:userId',
+      verifyToken,
       async (req: Request, res: Response) => {
         try {
           const userId = req.params.userId;
@@ -262,20 +267,25 @@ async function run() {
     );
 
     // A3. Single Artifact Detail
-    app.get('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const result = await productsCollection.findOne({
-          _id: new ObjectId(req.params.id),
-        });
-        res.send(result);
-      } catch (err) {
-        res.status(400).send({ message: 'Invalid Artifact ID' });
-      }
-    });
+    app.get(
+      '/api/products/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const result = await productsCollection.findOne({
+            _id: new ObjectId(req.params.id),
+          });
+          res.send(result);
+        } catch (err) {
+          res.status(400).send({ message: 'Invalid Artifact ID' });
+        }
+      },
+    );
 
     // A4. Related Artifacts
     app.get(
-      '/api/products/related/:category',verifyToken,
+      '/api/products/related/:category',
+      verifyToken,
       async (req: Request, res: Response) => {
         const result = await productsCollection
           .find({ category: req.params.category })
@@ -286,115 +296,143 @@ async function run() {
     );
 
     // A5. Delete Artifact (User Specific)
-    app.delete('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
-      const result = await productsCollection.deleteOne({
-        _id: new ObjectId(req.params.id),
-      });
-      res.send(result);
-    });
+    app.delete(
+      '/api/products/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        const result = await productsCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
+        res.send(result);
+      },
+    );
 
     /**
      * B. FAVORITE (WISHLIST) SYSTEM
      */
 
     // B1. Toggle Favorite (Add/Remove) with Counter logic
-    app.post('/api/favorites/toggle',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const { userId, productId } = req.body;
-        const query = { userId, productId };
-        const existing = await favoritesCollection.findOne(query);
+    app.post(
+      '/api/favorites/toggle',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const { userId, productId } = req.body;
+          const query = { userId, productId };
+          const existing = await favoritesCollection.findOne(query);
 
-        if (existing) {
-          await favoritesCollection.deleteOne(query);
-          await productsCollection.updateOne(
-            { _id: new ObjectId(productId) },
-            { $inc: { favoriteCount: -1 } },
-          );
-          res.send({
-            isFavorited: false,
-            message: 'Removed from sanctuary wishlist',
-          });
-        } else {
-          await favoritesCollection.insertOne({
-            ...req.body,
-            addedAt: new Date(),
-          });
-          await productsCollection.updateOne(
-            { _id: new ObjectId(productId) },
-            { $inc: { favoriteCount: 1 } },
-          );
-          res.send({
-            isFavorited: true,
-            message: 'Artifact preserved in wishlist',
-          });
+          if (existing) {
+            await favoritesCollection.deleteOne(query);
+            await productsCollection.updateOne(
+              { _id: new ObjectId(productId) },
+              { $inc: { favoriteCount: -1 } },
+            );
+            res.send({
+              isFavorited: false,
+              message: 'Removed from sanctuary wishlist',
+            });
+          } else {
+            await favoritesCollection.insertOne({
+              ...req.body,
+              addedAt: new Date(),
+            });
+            await productsCollection.updateOne(
+              { _id: new ObjectId(productId) },
+              { $inc: { favoriteCount: 1 } },
+            );
+            res.send({
+              isFavorited: true,
+              message: 'Artifact preserved in wishlist',
+            });
+          }
+        } catch (error) {
+          res.status(500).send({ message: 'Wishlist sync failed' });
         }
-      } catch (error) {
-        res.status(500).send({ message: 'Wishlist sync failed' });
-      }
-    });
+      },
+    );
 
     // B2. Get User Wishlist (Dashboard My Favorite Page)
-    app.get('/api/favorites/:userId',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const userId = req.params.userId;
-        const result = await favoritesCollection
-          .find({ userId })
-          .sort({ addedAt: -1 })
-          .toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: 'Failed to fetch wishlist' });
-      }
-    });
+    app.get(
+      '/api/favorites/:userId',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const userId = req.params.userId;
+          const result = await favoritesCollection
+            .find({ userId })
+            .sort({ addedAt: -1 })
+            .toArray();
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: 'Failed to fetch wishlist' });
+        }
+      },
+    );
 
     // B3. Check Status for Detail Page
-    app.get('/api/favorites/check',verifyToken, async (req: Request, res: Response) => {
-      const { userId, productId } = req.query;
-      const result = await favoritesCollection.findOne({
-        userId: userId as string,
-        productId: productId as string,
-      });
-      res.send({ isFavorited: !!result });
-    });
+    app.get(
+      '/api/favorites/check',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        const { userId, productId } = req.query;
+        const result = await favoritesCollection.findOne({
+          userId: userId as string,
+          productId: productId as string,
+        });
+        res.send({ isFavorited: !!result });
+      },
+    );
 
     // B4. Explicit Remove from My Favorite Page
-    app.delete('/api/favorites/:id',verifyToken, async (req: Request, res: Response) => {
-      const result = await favoritesCollection.deleteOne({
-        _id: new ObjectId(req.params.id),
-      });
-      res.send(result);
-    });
+    app.delete(
+      '/api/favorites/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        const result = await favoritesCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
+        res.send(result);
+      },
+    );
 
     /**
      * C. ORDER (PURCHASE REQUEST) SYSTEM
      */
 
     // C1. Create Order
-    app.post('/api/orders',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const { buyerId, sellerId, productId } = req.body;
-        if (buyerId === sellerId)
-          return res.status(400).send({ message: 'Self-purchase forbidden' });
+    app.post(
+      '/api/orders',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const { buyerId, sellerId, productId } = req.body;
+          if (buyerId === sellerId)
+            return res.status(400).send({ message: 'Self-purchase forbidden' });
 
-        const existing = await ordersCollection.findOne({ productId, buyerId });
-        if (existing)
-          return res
-            .status(400)
-            .send({ message: 'Request already transmitted' });
+          const existing = await ordersCollection.findOne({
+            productId,
+            buyerId,
+          });
+          if (existing)
+            return res
+              .status(400)
+              .send({ message: 'Request already transmitted' });
 
-        const result = await ordersCollection.insertOne({
-          ...req.body,
-          fulfillmentStatus: 'pending', // ডিফল্ট স্ট্যাটাস
-          orderedAt: new Date(),
-        });
-        res.status(201).send(result);
-      } catch (error) {
-        res.status(500).send({ message: 'Order creation failed' });
-      }
-    });
+          const result = await ordersCollection.insertOne({
+            ...req.body,
+            fulfillmentStatus: 'pending', // ডিফল্ট স্ট্যাটাস
+            orderedAt: new Date(),
+          });
+          res.status(201).send(result);
+        } catch (error) {
+          res.status(500).send({ message: 'Order creation failed' });
+        }
+      },
+    );
 
     app.get(
-      '/api/orders/received/:sellerId',verifyToken,
+      '/api/orders/received/:sellerId',
+      verifyToken,
       async (req: Request, res: Response) => {
         res.send(
           await ordersCollection
@@ -406,7 +444,8 @@ async function run() {
     );
 
     app.get(
-      '/api/orders/my-orders/:buyerId',verifyToken,
+      '/api/orders/my-orders/:buyerId',
+      verifyToken,
       async (req: Request, res: Response) => {
         res.send(
           await ordersCollection
@@ -418,31 +457,45 @@ async function run() {
     );
 
     // C4. Update Order Action (Accept/Reject by Seller)
-    app.patch('/api/orders/action/:id',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const { action } = req.body; // 'accepted' or 'rejected'
-        const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(req.params.id) },
-          { $set: { fulfillmentStatus: action } },
-        );
-        res.send({ success: true, message: `Request ${action} successfully` });
-      } catch (error) {
-        res.status(500).send({ message: 'Action sync failure' });
-      }
-    });
+    app.patch(
+      '/api/orders/action/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const { action } = req.body; // 'accepted' or 'rejected'
+          const result = await ordersCollection.updateOne(
+            { _id: new ObjectId(req.params.id) },
+            { $set: { fulfillmentStatus: action } },
+          );
+          res.send({
+            success: true,
+            message: `Request ${action} successfully`,
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Action sync failure' });
+        }
+      },
+    );
 
-    app.delete('/api/orders/:id',verifyToken, async (req: Request, res: Response) => {
-      res.send(
-        await ordersCollection.deleteOne({ _id: new ObjectId(req.params.id) }),
-      );
-    });
+    app.delete(
+      '/api/orders/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        res.send(
+          await ordersCollection.deleteOne({
+            _id: new ObjectId(req.params.id),
+          }),
+        );
+      },
+    );
 
     /**
      * D. ANALYTICS & DASHBOARD STATS
      */
 
     app.get(
-      '/api/dashboard/stats/:userId',verifyToken,
+      '/api/dashboard/stats/:userId',
+      verifyToken,
       async (req: Request, res: Response) => {
         const userId = req.params.userId;
         const stats = await productsCollection
@@ -489,7 +542,8 @@ async function run() {
     );
 
     app.get(
-      '/api/analytics/user/:userId',verifyToken,
+      '/api/analytics/user/:userId',
+      verifyToken,
       async (req: Request, res: Response) => {
         const stats = await productsCollection
           .find({ 'seller.id': req.params.userId })
@@ -515,121 +569,146 @@ async function run() {
     /**
      * E. USER PROFILE UPDATE (FIXED)
      */
-    app.patch('/api/users/:id',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const userId = req.params.id;
-        const { name, image } = req.body;
+    app.patch(
+      '/api/users/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const userId = req.params.id;
+          const { name, image } = req.body;
 
-        console.log('Incoming Update Data:', { name, image }); // এখন ডাটা আসবে
+          console.log('Incoming Update Data:', { name, image });
 
-        if (!ObjectId.isValid(userId)) {
-          return res.status(400).send({ message: 'Invalid Seeker ID' });
-        }
+          // ১. প্রথমে ID টি Valid ObjectId কিনা চেক করুন
+          if (!ObjectId.isValid(userId)) {
+            return res.status(400).send({
+              success: false,
+              message: 'Invalid Seeker ID format',
+            });
+          }
 
-        // ডাটাবেস আপডেট লজিক
-        const result = await usersCollection.updateOne(
-          {
-            $or: [{ _id: userId }, { _id: new ObjectId(userId) }],
-          },
-          {
-            $set: {
-              name: name,
-              image: image,
-              updatedAt: new Date(),
+          // ২. শুধু ObjectId ব্যবহার করুন (string ব্যবহার করবেন না)
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(userId) }, // সরাসরি ObjectId
+            {
+              $set: {
+                name: name,
+                image: image,
+                updatedAt: new Date(),
+              },
             },
-          },
-        );
+          );
 
-        if (result.matchedCount > 0) {
-          res.send({
-            success: true,
-            message: 'Identity synchronized successfully',
+          console.log('Update Result:', result);
+
+          if (result.matchedCount > 0) {
+            res.send({
+              success: true,
+              message: 'Identity synchronized successfully',
+            });
+          } else {
+            res.status(404).send({
+              success: false,
+              message: 'User not found in archives',
+            });
+          }
+        } catch (error) {
+          console.error('Update Error:', error);
+          res.status(500).send({
+            success: false,
+            message: 'Internal Server Error',
+            error: error instanceof Error ? error.message : String(error),
           });
-        } else {
-          res.status(404).send({ message: 'User not found in archives' });
         }
-      } catch (error) {
-        console.error('Update Error:', error);
-        res.status(500).send({ message: 'Internal Server Error' });
-      }
-    });
+      },
+    );
 
     /**
      * F. MY PRODUCTS (AGGREGATION)
      */
-    app.get('/api/my-products/:userId',verifyToken, async (req: Request, res: Response) => {
-      const userId = req.params.userId;
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = 6;
-      const skip = (page - 1) * limit;
+    app.get(
+      '/api/my-products/:userId',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        const userId = req.params.userId;
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = 6;
+        const skip = (page - 1) * limit;
 
-      const result = await productsCollection
-        .aggregate([
-          { $match: { 'seller.id': userId } },
-          {
-            $facet: {
-              metadata: [{ $count: 'total' }],
-              data: [
-                { $sort: { createdAt: -1 } },
-                { $skip: skip },
-                { $limit: limit },
-                {
-                  $project: {
-                    _id: 1,
-                    title: 1,
-                    price: 1,
-                    category: 1,
-                    imageUrl: 1,
-                    createdAt: 1,
+        const result = await productsCollection
+          .aggregate([
+            { $match: { 'seller.id': userId } },
+            {
+              $facet: {
+                metadata: [{ $count: 'total' }],
+                data: [
+                  { $sort: { createdAt: -1 } },
+                  { $skip: skip },
+                  { $limit: limit },
+                  {
+                    $project: {
+                      _id: 1,
+                      title: 1,
+                      price: 1,
+                      category: 1,
+                      imageUrl: 1,
+                      createdAt: 1,
+                    },
                   },
-                },
-              ],
+                ],
+              },
             },
-          },
-        ])
-        .toArray();
+          ])
+          .toArray();
 
-      res.send({
-        products: result[0].data,
-        totalPages: Math.ceil((result[0].metadata[0]?.total || 0) / limit),
-        currentPage: page,
-      });
-    });
+        res.send({
+          products: result[0].data,
+          totalPages: Math.ceil((result[0].metadata[0]?.total || 0) / limit),
+          currentPage: page,
+        });
+      },
+    );
 
     /**
      * Update an existing Gadget listing
      * URL: PATCH /api/products/:id
      */
-    app.patch('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
-      try {
-        const id = req.params.id;
-        const updatedData = req.body;
-        delete updatedData._id;
-        console.log('ID:', req.params.id);
-        console.log('BODY:', req.body);
+    app.patch(
+      '/api/products/:id',
+      verifyToken,
+      async (req: Request, res: Response) => {
+        try {
+          const id = req.params.id;
+          const updatedData = req.body;
+          delete updatedData._id;
+          console.log('ID:', req.params.id);
+          console.log('BODY:', req.body);
 
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = {
-          $set: updatedData,
-        };
+          const filter = { _id: new ObjectId(id) };
+          const updateDoc = {
+            $set: updatedData,
+          };
 
-        const result = await productsCollection.updateOne(filter, updateDoc);
-        console.log(result);
+          const result = await productsCollection.updateOne(filter, updateDoc);
+          console.log(result);
 
-        if (result.matchedCount > 0) {
-          res.send({
-            success: true,
-            message:
-              'Artifact data successfully synchronized in sanctuary logs',
-          });
-        } else {
-          res.status(404).send({ message: 'No artifact found with this ID' });
+          if (result.matchedCount > 0) {
+            res.send({
+              success: true,
+              message:
+                'Artifact data successfully synchronized in sanctuary logs',
+            });
+          } else {
+            res.status(404).send({ message: 'No artifact found with this ID' });
+          }
+        } catch (error) {
+          console.error('Update Error:', error);
+          res
+            .status(500)
+            .send({ message: 'Protocol sync failed during update' });
         }
-      } catch (error) {
-        console.error('Update Error:', error);
-        res.status(500).send({ message: 'Protocol sync failed during update' });
-      }
-    });
+      },
+    );
 
     /**
      * G. ADMIN: USER MANAGEMENT ROUTES (Optimized with Pagination & Master Protection)
@@ -871,7 +950,7 @@ async function run() {
      */
     app.get(
       '/api/admin/dashboard-stats',
-     
+
       async (req: Request, res: Response) => {
         try {
           // ---------- 1. BASIC SUMMARY ----------
