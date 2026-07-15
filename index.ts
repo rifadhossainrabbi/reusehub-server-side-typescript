@@ -495,19 +495,6 @@ async function run() {
      * H. ADMIN: PRODUCT MANAGEMENT ROUTES
      */
 
-    // H1. Get all products for Admin (No user filtering)
-    app.get('/api/admin/products', async (req: Request, res: Response) => {
-      try {
-        const result = await productsCollection
-          .find()
-          .sort({ createdAt: -1 })
-          .toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: 'Admin protocol failed' });
-      }
-    });
-
     // H2. Approve Product (Pending -> Approved)
     app.patch(
       '/api/admin/products/approve/:id',
@@ -557,7 +544,76 @@ async function run() {
         }
       },
     );
-    
+
+    /**
+     * H. ADMIN: PRODUCT MANAGEMENT ROUTES (Optimized with Pagination & Toggles)
+     */
+
+    // H1. Get all products with Pagination (Using Aggregation Facet)
+    app.get('/api/admin/products', async (req: Request, res: Response) => {
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = 6; // Items per page
+        const skip = (page - 1) * limit;
+
+        const result = await productsCollection
+          .aggregate([
+            {
+              $facet: {
+                metadata: [{ $count: 'total' }],
+                data: [
+                  { $sort: { createdAt: -1 } },
+                  { $skip: skip },
+                  { $limit: limit },
+                ],
+              },
+            },
+          ])
+          .toArray();
+
+        const totalItems = result[0].metadata[0]?.total || 0;
+        res.send({
+          products: result[0].data,
+          totalPages: Math.ceil(totalItems / limit),
+          currentPage: page,
+          totalItems,
+        });
+      } catch (error) {
+        res.status(500).send({ message: 'Admin query failed' });
+      }
+    });
+
+    // H3. Toggle Featured Status (Atomic Toggle)
+    app.patch(
+      '/api/admin/products/feature/:id',
+      async (req: Request, res: Response) => {
+        try {
+          const id = req.params.id;
+          const product = await productsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+
+          // Toggle the boolean value
+          const newStatus = !product?.isFeatured;
+
+          await productsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isFeatured: newStatus } },
+          );
+
+          res.send({
+            success: true,
+            isFeatured: newStatus,
+            message: newStatus
+              ? 'Promoted to Featured'
+              : 'Removed from Featured',
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Toggle protocol failed' });
+        }
+      },
+
+    );
   } catch (error) {
     console.error('Critical Database Error:', error);
   }
