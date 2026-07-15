@@ -105,6 +105,85 @@ async function run() {
       }
     });
 
+    /**
+     * D. USER SPECIFIC ANALYTICS (Atomic Aggregation)
+     */
+    app.get(
+      '/api/dashboard/user-intel/:userId',
+      async (req: Request, res: Response) => {
+        try {
+          const userId = req.params.userId;
+
+          const intel = await productsCollection
+            .aggregate([
+              { $match: { 'seller.id': userId } },
+              {
+                $facet: {
+                  // ১. গ্লোবাল ওভারভিউ
+                  overview: [
+                    {
+                      $group: {
+                        _id: null,
+                        totalValue: { $sum: '$price' },
+                        totalListings: { $sum: 1 },
+                        avgPrice: { $avg: '$price' },
+                      },
+                    },
+                  ],
+                  // ২. ক্যাটাগরি ডিস্ট্রিবিউশন (Pie Chart এর জন্য)
+                  categoryData: [
+                    { $group: { _id: '$category', value: { $sum: 1 } } },
+                    { $project: { name: '$_id', value: 1, _id: 0 } },
+                  ],
+                  // ৩. কন্ডিশন ব্রেকডাউন (Bar Chart এর জন্য)
+                  conditionData: [
+                    { $group: { _id: '$condition', count: { $sum: 1 } } },
+                    { $project: { name: '$_id', value: '$count', _id: 0 } },
+                  ],
+                  // ৪. টপ এনগেজমেন্ট (Area Chart এর জন্য)
+                  engagement: [
+                    { $sort: { favoriteCount: -1 } },
+                    { $limit: 6 },
+                    { $project: { name: '$title', favs: '$favoriteCount' } },
+                  ],
+                },
+              },
+            ])
+            .toArray();
+
+          // ৫. অর্ডার এবং উইশলিস্ট স্ট্যাটস
+          const pendingOrders = await db
+            .collection('orders')
+            .countDocuments({ sellerId: userId, status: 'pending' });
+          const totalRequests = await db
+            .collection('orders')
+            .countDocuments({ sellerId: userId });
+          const recentRequests = await db
+            .collection('orders')
+            .find({ sellerId: userId })
+            .sort({ orderedAt: -1 })
+            .limit(3)
+            .toArray();
+
+          res.send({
+            summary: intel[0].overview[0] || {
+              totalValue: 0,
+              totalListings: 0,
+              avgPrice: 0,
+            },
+            categoryMix: intel[0].categoryData,
+            conditionMix: intel[0].conditionData,
+            chartData: intel[0].engagement,
+            pendingOrders,
+            totalRequests,
+            recentRequests,
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Intelligence sync failed' });
+        }
+      },
+    );
+
     // A3. Single Artifact Detail
     app.get('/api/products/:id', async (req: Request, res: Response) => {
       try {
