@@ -370,8 +370,6 @@ async function run() {
       });
     });
 
-    // index.ts এর ভেতর PRODUCT MANAGEMENT ক্যাটাগরিতে এটি বসান
-
     /**
      * Update an existing Gadget listing
      * URL: PATCH /api/products/:id
@@ -380,9 +378,6 @@ async function run() {
       try {
         const id = req.params.id;
         const updatedData = req.body;
-
-        // ১. অত্যন্ত জরুরি: মঙ্গোডিবি _id ফিল্ড আপডেট করতে দেয় না।
-        // তাই বডি থেকে এটি ডিলিট করে দিতে হবে যদি থাকে।
         delete updatedData._id;
 
         const filter = { _id: new ObjectId(id) };
@@ -390,7 +385,6 @@ async function run() {
           $set: updatedData,
         };
 
-        // db.collection এর বদলে সরাসরি productsCollection ব্যবহার করুন যা আগে ডিফাইন করা আছে
         const result = await productsCollection.updateOne(filter, updateDoc);
 
         if (result.matchedCount > 0) {
@@ -409,141 +403,123 @@ async function run() {
     });
 
     /**
-     * G. ADMIN: USER MANAGEMENT ROUTES
+     * G. ADMIN: USER MANAGEMENT ROUTES (Optimized with Pagination & Master Protection)
      */
 
-    // G1. সব ইউজার গেট করার API
+    // G1. Get all users with Pagination (Using Aggregation Facet)
     app.get('/api/admin/users', async (req: Request, res: Response) => {
-      const result = await usersCollection.find().toArray();
-      res.send(result);
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = 6;
+        const skip = (page - 1) * limit;
+
+        const result = await usersCollection
+          .aggregate([
+            {
+              $facet: {
+                metadata: [{ $count: 'total' }],
+                data: [
+                  { $sort: { createdAt: -1 } },
+                  { $skip: skip },
+                  { $limit: limit },
+                ],
+              },
+            },
+          ])
+          .toArray();
+
+        const totalItems = result[0].metadata[0]?.total || 0;
+        res.send({
+          users: result[0].data,
+          totalPages: Math.ceil(totalItems / limit),
+          currentPage: page,
+        });
+      } catch (error) {
+        res.status(500).send({ message: 'Failed to fetch citizen logs' });
+      }
     });
 
-    // G2. ইউজারকে এডমিন বানানোর API
+    /**
+     * G2. ROLE TOGGLE (User <-> Admin) - ONLY MASTER CAN EXECUTE
+     */
     app.patch(
-      '/api/admin/users/make-admin/:id',
+      '/api/admin/users/toggle-role/:id',
       async (req: Request, res: Response) => {
-        const id = req.params.id;
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role: 'admin' } },
-        );
-        res.send(result);
+        try {
+          const targetId = req.params.id;
+          const { requesterId } = req.body;
+
+          const requester = await db
+            .collection('user')
+            .findOne({ _id: new ObjectId(requesterId) });
+          if (requester?.admin !== 'master') {
+            return res.status(403).send({
+              message: 'Forbidden: Only Master Admin can alter roles.',
+            });
+          }
+
+          const targetUser = await db
+            .collection('user')
+            .findOne({ _id: new ObjectId(targetId) });
+          if (!targetUser)
+            return res.status(404).send({ message: 'Citizen not found' });
+
+          if (targetUser.admin === 'master') {
+            return res
+              .status(403)
+              .send({ message: 'Master Authority is immutable' });
+          }
+
+          const newRole = targetUser.role === 'admin' ? 'user' : 'admin';
+
+          await db
+            .collection('user')
+            .updateOne(
+              { _id: new ObjectId(targetId) },
+              { $set: { role: newRole } },
+            );
+
+          res.send({
+            success: true,
+            message: `Seeker identity updated to ${newRole}`,
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Role sync failure' });
+        }
       },
     );
 
-    // G3. ক্যাসকেড ডিলিট: ইউজার ডিলিট করলে সব ডাটা মুছে যাবে
-    /**
-     * G3. MASTER PURGE: Permanent deletion of a citizen and all linked artifacts
-     * URL: DELETE /api/admin/users/:id
-     */
+    // G3. MASTER PURGE with Protection for Master Admin
     app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
       const userId = req.params.id;
 
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ message: 'Invalid Citizen ID' });
-      }
-
       try {
-        /**
-         * Standard Parallel Deletion Strategy
-         * This hits all collections simultaneously for maximum speed.
-         */
+        const targetUser = await usersCollection.findOne({
+          _id: new ObjectId(userId),
+        });
+
+        if (targetUser?.admin === 'master') {
+          return res.status(403).send({
+            message:
+              'Access Denied: Master Admin is immutable and cannot be purged.',
+          });
+        }
+
         const operations = [
-          // 1. Remove from User Collection
           usersCollection.deleteOne({ _id: new ObjectId(userId) }),
-
-          // 2. Remove all gadgets listed by this user
           productsCollection.deleteMany({ 'seller.id': userId }),
-
-          // 3. Remove all wishlist entries created by this user
           favoritesCollection.deleteMany({ userId: userId }),
-
-          // 4. Remove all orders where user was either buyer or seller
           ordersCollection.deleteMany({
             $or: [{ buyerId: userId }, { sellerId: userId }],
           }),
         ];
 
-        // Trigger all delete commands in parallel
-        const results = await Promise.all(operations);
-
-        // Calculating total records erased for logs
-        const totalErased = results.reduce(
-          (acc, curr) => acc + (curr.deletedCount || 0),
-          0,
-        );
-
-        res.send({
-          success: true,
-          message: `Master purge successful. ${totalErased} records erased from sanctuary logs.`,
-          details: {
-            userAccount: results[0].deletedCount,
-            gadgets: results[1].deletedCount,
-            wishlist: results[2].deletedCount,
-            orders: results[3].deletedCount,
-          },
-        });
+        await Promise.all(operations);
+        res.send({ success: true, message: 'Citizen purged successfully' });
       } catch (error) {
-        console.error('Purge Protocol Failure:', error);
-        res
-          .status(500)
-          .send({ message: 'Critical failure during master purge' });
+        res.status(500).send({ message: 'Purge protocol failed' });
       }
     });
-
-    /**
-     * H. ADMIN: PRODUCT MANAGEMENT ROUTES
-     */
-
-    // H2. Approve Product (Pending -> Approved)
-    app.patch(
-      '/api/admin/products/approve/:id',
-      async (req: Request, res: Response) => {
-        const result = await productsCollection.updateOne(
-          { _id: new ObjectId(req.params.id) },
-          { $set: { status: 'approved' } },
-        );
-        res.send(result);
-      },
-    );
-
-    // H3. Toggle Featured Status
-    app.patch(
-      '/api/admin/products/feature/:id',
-      async (req: Request, res: Response) => {
-        const id = req.params.id;
-        const product = await productsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        const result = await productsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { isFeatured: !product?.isFeatured } },
-        );
-        res.send(result);
-      },
-    );
-
-    // H4. Master Product Purge (Cascade Deletion)
-    app.delete(
-      '/api/admin/products/:id',
-      async (req: Request, res: Response) => {
-        const productId = req.params.id;
-        try {
-          const operations = [
-            productsCollection.deleteOne({ _id: new ObjectId(productId) }), // Remove product
-            favoritesCollection.deleteMany({ productId: productId }), // Clear wishlists
-            ordersCollection.deleteMany({ productId: productId }), // Clear order requests
-          ];
-          await Promise.all(operations);
-          res.send({
-            success: true,
-            message: 'Artifact and all linked logs destroyed',
-          });
-        } catch (error) {
-          res.status(500).send({ message: 'Product purge failed' });
-        }
-      },
-    );
 
     /**
      * H. ADMIN: PRODUCT MANAGEMENT ROUTES (Optimized with Pagination & Toggles)
@@ -553,7 +529,7 @@ async function run() {
     app.get('/api/admin/products', async (req: Request, res: Response) => {
       try {
         const page = parseInt(req.query.page as string) || 1;
-        const limit = 6; // Items per page
+        const limit = 6;
         const skip = (page - 1) * limit;
 
         const result = await productsCollection
@@ -583,6 +559,18 @@ async function run() {
       }
     });
 
+    // H2. Approve Product (Pending -> Approved)
+    app.patch(
+      '/api/admin/products/approve/:id',
+      async (req: Request, res: Response) => {
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: 'approved' } },
+        );
+        res.send(result);
+      },
+    );
+
     // H3. Toggle Featured Status (Atomic Toggle)
     app.patch(
       '/api/admin/products/feature/:id',
@@ -592,8 +580,6 @@ async function run() {
           const product = await productsCollection.findOne({
             _id: new ObjectId(id),
           });
-
-          // Toggle the boolean value
           const newStatus = !product?.isFeatured;
 
           await productsCollection.updateOne(
@@ -612,7 +598,330 @@ async function run() {
           res.status(500).send({ message: 'Toggle protocol failed' });
         }
       },
+    );
 
+    // H4. Master Product Purge (Cascade Deletion)
+    app.delete(
+      '/api/admin/products/:id',
+      async (req: Request, res: Response) => {
+        const productId = req.params.id;
+        try {
+          const operations = [
+            productsCollection.deleteOne({ _id: new ObjectId(productId) }),
+            favoritesCollection.deleteMany({ productId: productId }),
+            ordersCollection.deleteMany({ productId: productId }),
+          ];
+          await Promise.all(operations);
+          res.send({
+            success: true,
+            message: 'Artifact and all linked logs destroyed',
+          });
+        } catch (error) {
+          res.status(500).send({ message: 'Product purge failed' });
+        }
+      },
+    );
+
+    /**
+     * I. ADMIN: FULL ANALYTICS (Defensive / Type-safe version)
+     * Fixes 500 error caused by non-Date `createdAt` or non-numeric `price`
+     * fields by safely converting them with $convert before aggregation.
+     */
+    app.get(
+      '/api/admin/dashboard-stats',
+      async (req: Request, res: Response) => {
+        try {
+          // ---------- 1. BASIC SUMMARY ----------
+          const totalUsers = await usersCollection.countDocuments();
+          const totalAdmins = await usersCollection.countDocuments({
+            role: 'admin',
+          });
+          const totalProducts = await productsCollection.countDocuments();
+          const pendingProducts = await productsCollection.countDocuments({
+            status: 'pending',
+          });
+          const approvedProducts = await productsCollection.countDocuments({
+            status: 'approved',
+          });
+          const featuredProducts = await productsCollection.countDocuments({
+            isFeatured: true,
+          });
+          const totalOrders = await ordersCollection.countDocuments();
+          const totalFavorites = await favoritesCollection.countDocuments();
+
+          // Safe average price (handles missing/null/string price values)
+          const avgPriceAgg = await productsCollection
+            .aggregate([
+              {
+                $addFields: {
+                  _safePrice: {
+                    $convert: {
+                      input: '$price',
+                      to: 'double',
+                      onError: 0,
+                      onNull: 0,
+                    },
+                  },
+                },
+              },
+              { $group: { _id: null, avgPrice: { $avg: '$_safePrice' } } },
+            ])
+            .toArray();
+          const avgPrice = avgPriceAgg[0]?.avgPrice || 0;
+
+          // ---------- 2. CATEGORY DISTRIBUTION ----------
+          const categoryStats = await productsCollection
+            .aggregate([
+              {
+                $group: {
+                  _id: { $ifNull: ['$category', 'Uncategorized'] },
+                  count: { $sum: 1 },
+                },
+              },
+              { $project: { _id: 0, name: '$_id', value: '$count' } },
+              { $sort: { value: -1 } },
+            ])
+            .toArray();
+
+          // ---------- 3. PRODUCT STATUS BREAKDOWN ----------
+          const statusStats = await productsCollection
+            .aggregate([
+              {
+                $group: {
+                  _id: { $ifNull: ['$status', 'unknown'] },
+                  count: { $sum: 1 },
+                },
+              },
+              { $project: { _id: 0, name: '$_id', value: '$count' } },
+            ])
+            .toArray();
+
+          // ---------- 4. ORDER STATUS BREAKDOWN ----------
+          const orderStatusStats = await ordersCollection
+            .aggregate([
+              {
+                $group: {
+                  _id: { $ifNull: ['$status', 'unknown'] },
+                  count: { $sum: 1 },
+                },
+              },
+              { $project: { _id: 0, name: '$_id', value: '$count' } },
+            ])
+            .toArray();
+
+          // ---------- 5. USER GROWTH (safe date conversion) ----------
+          const userGrowth = await usersCollection
+            .aggregate([
+              {
+                $addFields: {
+                  _safeDate: {
+                    $convert: {
+                      input: '$createdAt',
+                      to: 'date',
+                      onError: null,
+                      onNull: null,
+                    },
+                  },
+                },
+              },
+              { $match: { _safeDate: { $ne: null } } },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: '$_safeDate' },
+                    month: { $month: '$_safeDate' },
+                  },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { '_id.year': 1, '_id.month': 1 } },
+              { $limit: 12 },
+              {
+                $project: {
+                  _id: 0,
+                  month: {
+                    $concat: [
+                      { $toString: '$_id.year' },
+                      '-',
+                      { $toString: '$_id.month' },
+                    ],
+                  },
+                  users: '$count',
+                },
+              },
+            ])
+            .toArray();
+
+          // ---------- 6. PRODUCT LISTING TREND (safe date conversion) ----------
+          const listingTrend = await productsCollection
+            .aggregate([
+              {
+                $addFields: {
+                  _safeDate: {
+                    $convert: {
+                      input: '$createdAt',
+                      to: 'date',
+                      onError: null,
+                      onNull: null,
+                    },
+                  },
+                },
+              },
+              { $match: { _safeDate: { $ne: null } } },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: '$_safeDate' },
+                    month: { $month: '$_safeDate' },
+                  },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { '_id.year': 1, '_id.month': 1 } },
+              { $limit: 12 },
+              {
+                $project: {
+                  _id: 0,
+                  month: {
+                    $concat: [
+                      { $toString: '$_id.year' },
+                      '-',
+                      { $toString: '$_id.month' },
+                    ],
+                  },
+                  listings: '$count',
+                },
+              },
+            ])
+            .toArray();
+
+          // ---------- 7. TOP 5 SELLERS (guard against missing seller.id) ----------
+          const topSellers = await productsCollection
+            .aggregate([
+              { $match: { 'seller.id': { $exists: true, $ne: null } } },
+              {
+                $group: {
+                  _id: '$seller.id',
+                  sellerName: { $first: '$seller.name' },
+                  listings: { $sum: 1 },
+                },
+              },
+              { $sort: { listings: -1 } },
+              { $limit: 5 },
+              {
+                $project: {
+                  _id: 0,
+                  name: { $ifNull: ['$sellerName', 'Unknown'] },
+                  listings: 1,
+                },
+              },
+            ])
+            .toArray();
+
+          // ---------- 8. TOP 5 FAVORITED PRODUCTS ----------
+          const topFavorited = await productsCollection
+            .find({})
+            .project({ title: 1, favoriteCount: 1 })
+            .sort({ favoriteCount: -1 })
+            .limit(5)
+            .toArray();
+
+          // ---------- 9. PRICE RANGE DISTRIBUTION (safe numeric conversion) ----------
+          const priceDistribution = await productsCollection
+            .aggregate([
+              {
+                $addFields: {
+                  _safePrice: {
+                    $convert: {
+                      input: '$price',
+                      to: 'double',
+                      onError: 0,
+                      onNull: 0,
+                    },
+                  },
+                },
+              },
+              {
+                $bucket: {
+                  groupBy: '$_safePrice',
+                  boundaries: [0, 500, 1500, 5000, 100000],
+                  default: '5000+',
+                  output: { count: { $sum: 1 } },
+                },
+              },
+            ])
+            .toArray();
+
+          const priceLabels: Record<string, string> = {
+            '0': '৳0 - ৳500',
+            '500': '৳500 - ৳1500',
+            '1500': '৳1500 - ৳5000',
+            '5000': '৳5000+',
+            '5000+': '৳5000+',
+          };
+          const priceStats = priceDistribution.map((b: any) => ({
+            name: priceLabels[String(b._id)] || String(b._id),
+            value: b.count,
+          }));
+
+          // ---------- 10. RECENT ACTIVITY ----------
+          const recentUsers = await usersCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .project({ name: 1, email: 1, createdAt: 1 })
+            .toArray();
+
+          const recentProducts = await productsCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .project({ title: 1, price: 1, status: 1, createdAt: 1 })
+            .toArray();
+
+          const recentOrders = await ordersCollection
+            .find({})
+            .sort({ orderedAt: -1 })
+            .limit(5)
+            .toArray();
+
+          // ---------- FINAL RESPONSE ----------
+          res.send({
+            summary: {
+              totalUsers,
+              totalAdmins,
+              totalProducts,
+              pendingProducts,
+              approvedProducts,
+              featuredProducts,
+              totalOrders,
+              totalFavorites,
+              avgPrice: Math.round(avgPrice),
+            },
+            categoryStats,
+            statusStats,
+            orderStatusStats,
+            userGrowth,
+            listingTrend,
+            topSellers,
+            topFavorited: topFavorited.map((p: any) => ({
+              name: (p.title || '').slice(0, 14),
+              favorites: p.favoriteCount || 0,
+            })),
+            priceStats,
+            recentUsers,
+            recentProducts,
+            recentOrders,
+          });
+        } catch (error) {
+          // Full error detail printed to backend terminal for debugging
+          console.error('Analytics Error:', error);
+          res.status(500).send({
+            message: 'Analytics synchronization failed',
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
     );
   } catch (error) {
     console.error('Critical Database Error:', error);
