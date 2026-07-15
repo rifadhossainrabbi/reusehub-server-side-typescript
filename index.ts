@@ -4,14 +4,29 @@ import { MongoClient, ServerApiVersion, ObjectId } from 'mongodb';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: { id: string; email: string; role: string; name?: string };
+    }
+  }
+}
+
 // --- 1. INITIAL CONFIGURATIONS ---
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
 
 // --- 2. MIDDLEWARES ---
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: [
+      'http://localhost:3000',
+      process.env.CLIENT_URL as string, // e.g. deployed frontend URL
+    ],
+    credentials: true,
+  }),
+);
 
 // --- 3. DATABASE CONNECTION ---
 const uri = process.env.MONGODB_URI as string;
@@ -32,6 +47,68 @@ async function run() {
     const usersCollection = db.collection('user');
 
     console.log('--- REUSEHUB: ALL SYSTEMS SYNCHRONIZED ---');
+
+    const sessionCollection = db.collection('session');
+
+    // --- AUTH MIDDLEWARE ---
+    const verifyToken = async (req: Request, res: Response, next: any) => {
+      try {
+        const authHeader = req.headers.authorization;
+        console.log(authHeader, 'autheader');
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+          return res
+            .status(401)
+            .send({ message: 'Unauthorized: No token provided' });
+        }
+
+        const token = authHeader.split(' ')[1];
+
+        const session = await sessionCollection.findOne({
+          token,
+          expiresAt: { $gt: new Date() }, // expired session বাতিল
+        });
+
+        if (!session) {
+          return res
+            .status(401)
+            .send({ message: 'Unauthorized: Invalid or expired token' });
+        }
+
+        const user = await usersCollection.findOne({
+          _id: new ObjectId(session.userId),
+        });
+        console.log(user, 'user');
+
+        if (!user) {
+          return res
+            .status(401)
+            .send({ message: 'Unauthorized: User not found' });
+        }
+
+        req.user = {
+          id: user._id.toString(),
+          email: user.email,
+          role: user.role,
+          name: user.name,
+        };
+
+        next();
+      } catch (error) {
+        console.error('Token verification error:', error);
+        res
+          .status(401)
+          .send({ message: 'Unauthorized: Token verification failed' });
+      }
+    };
+
+    // --- ADMIN-ONLY MIDDLEWARE (verifyToken এর পরে ব্যবহার করতে হবে) ---
+    const verifyAdmin = async (req: Request, res: Response, next: any) => {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).send({ message: 'Forbidden: Admins only' });
+      }
+      next();
+    };
 
     /**
      * A. PRODUCT MANAGEMENT ROUTES
@@ -534,30 +611,36 @@ async function run() {
     });
 
     /**
-     * G2. ROLE TOGGLE (User <-> Admin) - ONLY MASTER CAN EXECUTE
+     * G2. ROLE TOGGLE (User <-> Admin) - SECURED WITH verifyToken
      */
     app.patch(
       '/api/admin/users/toggle-role/:id',
+      verifyToken, // মিডলওয়্যার যোগ করা হয়েছে
       async (req: Request, res: Response) => {
         try {
           const targetId = req.params.id;
-          const { requesterId } = req.body;
+          const requesterId = req.user?.id; // মিডলওয়্যার থেকে আইডি নেওয়া হয়েছে
 
-          const requester = await db
-            .collection('user')
-            .findOne({ _id: new ObjectId(requesterId) });
+          // ১. রিকোয়েস্টার (আপনি) মাস্টার অ্যাডমিন কি না চেক
+          const requester = await db.collection('user').findOne({
+            _id: new ObjectId(requesterId),
+          });
+
           if (requester?.admin !== 'master') {
             return res.status(403).send({
               message: 'Forbidden: Only Master Admin can alter roles.',
             });
           }
 
-          const targetUser = await db
-            .collection('user')
-            .findOne({ _id: new ObjectId(targetId) });
+          // ২. যাকে চেঞ্জ করবেন তাকে খোঁজা
+          const targetUser = await db.collection('user').findOne({
+            _id: new ObjectId(targetId),
+          });
+
           if (!targetUser)
             return res.status(404).send({ message: 'Citizen not found' });
 
+          // ৩. মাস্টার অ্যাডমিনকে কি না চেক (নিজেকে চেঞ্জ করা যাবে না)
           if (targetUser.admin === 'master') {
             return res
               .status(403)
@@ -566,19 +649,27 @@ async function run() {
 
           const newRole = targetUser.role === 'admin' ? 'user' : 'admin';
 
-          await db
+          // ৪. ডাটাবেস আপডেট
+          const updateResult = await db
             .collection('user')
             .updateOne(
               { _id: new ObjectId(targetId) },
               { $set: { role: newRole } },
             );
 
-          res.send({
-            success: true,
-            message: `Seeker identity updated to ${newRole}`,
-          });
+          if (updateResult.modifiedCount > 0) {
+            res.send({
+              success: true,
+              message: `Seeker identity updated to ${newRole}`,
+            });
+          } else {
+            res.status(500).send({ message: 'Failed to update user role' });
+          }
         } catch (error) {
-          res.status(500).send({ message: 'Role sync failure' });
+          console.error('Toggle Error:', error);
+          res
+            .status(500)
+            .send({ message: 'Internal Server Error: ID conversion failed' });
         }
       },
     );
@@ -723,6 +814,7 @@ async function run() {
      */
     app.get(
       '/api/admin/dashboard-stats',
+      verifyToken,
       async (req: Request, res: Response) => {
         try {
           // ---------- 1. BASIC SUMMARY ----------
