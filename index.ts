@@ -22,11 +22,14 @@ app.use(
   cors({
     origin: [
       'http://localhost:3000',
-      process.env.CLIENT_URL as string, // e.g. deployed frontend URL
+      process.env.CLIENT_URL as string,
     ],
     credentials: true,
   }),
 );
+
+// এটি অবশ্যই থাকতে হবে, না হলে req.body খালি আসবে
+app.use(express.json());
 
 // --- 3. DATABASE CONNECTION ---
 const uri = process.env.MONGODB_URI as string;
@@ -488,12 +491,49 @@ async function run() {
     /**
      * E. USER PROFILE
      */
+    /**
+     * E. USER PROFILE UPDATE (Section E - Final Correct Version)
+     */
+    /**
+     * E. USER PROFILE UPDATE (FIXED)
+     */
     app.patch('/api/users/:id', async (req: Request, res: Response) => {
-      const result = await usersCollection.updateOne(
-        { _id: new ObjectId(req.params.id) },
-        { $set: req.body },
-      );
-      res.send(result);
+      try {
+        const userId = req.params.id;
+        const { name, image } = req.body;
+
+        console.log('Incoming Update Data:', { name, image }); // এখন ডাটা আসবে
+
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send({ message: 'Invalid Seeker ID' });
+        }
+
+        // ডাটাবেস আপডেট লজিক
+        const result = await usersCollection.updateOne(
+          {
+            $or: [{ _id: userId }, { _id: new ObjectId(userId) }],
+          },
+          {
+            $set: {
+              name: name,
+              image: image,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        if (result.matchedCount > 0) {
+          res.send({
+            success: true,
+            message: 'Identity synchronized successfully',
+          });
+        } else {
+          res.status(404).send({ message: 'User not found in archives' });
+        }
+      } catch (error) {
+        console.error('Update Error:', error);
+        res.status(500).send({ message: 'Internal Server Error' });
+      }
     });
 
     /**
@@ -615,7 +655,7 @@ async function run() {
      */
     app.patch(
       '/api/admin/users/toggle-role/:id',
-      verifyToken, // মিডলওয়্যার যোগ করা হয়েছে
+      verifyToken,
       async (req: Request, res: Response) => {
         try {
           const targetId = req.params.id;
