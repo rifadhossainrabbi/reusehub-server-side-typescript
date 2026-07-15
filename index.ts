@@ -20,10 +20,7 @@ const port = process.env.PORT || 5000;
 // --- 2. MIDDLEWARES ---
 app.use(
   cors({
-    origin: [
-      'http://localhost:3000',
-      process.env.CLIENT_URL as string,
-    ],
+    origin: ['http://localhost:3000', process.env.CLIENT_URL as string],
     credentials: true,
   }),
 );
@@ -372,21 +369,28 @@ async function run() {
      * C. ORDER (PURCHASE REQUEST) SYSTEM
      */
 
+    // C1. Create Order
     app.post('/api/orders', async (req: Request, res: Response) => {
-      const { buyerId, sellerId, productId } = req.body;
-      if (buyerId === sellerId)
-        return res.status(400).send({ message: 'Self-purchase forbidden' });
+      try {
+        const { buyerId, sellerId, productId } = req.body;
+        if (buyerId === sellerId)
+          return res.status(400).send({ message: 'Self-purchase forbidden' });
 
-      const existing = await ordersCollection.findOne({ productId, buyerId });
-      if (existing)
-        return res.status(400).send({ message: 'Request already transmitted' });
+        const existing = await ordersCollection.findOne({ productId, buyerId });
+        if (existing)
+          return res
+            .status(400)
+            .send({ message: 'Request already transmitted' });
 
-      const result = await ordersCollection.insertOne({
-        ...req.body,
-        status: 'pending',
-        orderedAt: new Date(),
-      });
-      res.status(201).send(result);
+        const result = await ordersCollection.insertOne({
+          ...req.body,
+          fulfillmentStatus: 'pending', // ডিফল্ট স্ট্যাটাস
+          orderedAt: new Date(),
+        });
+        res.status(201).send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Order creation failed' });
+      }
     });
 
     app.get(
@@ -412,6 +416,20 @@ async function run() {
         );
       },
     );
+
+    // C4. Update Order Action (Accept/Reject by Seller)
+    app.patch('/api/orders/action/:id', async (req: Request, res: Response) => {
+      try {
+        const { action } = req.body; // 'accepted' or 'rejected'
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { fulfillmentStatus: action } },
+        );
+        res.send({ success: true, message: `Request ${action} successfully` });
+      } catch (error) {
+        res.status(500).send({ message: 'Action sync failure' });
+      }
+    });
 
     app.delete('/api/orders/:id', async (req: Request, res: Response) => {
       res.send(
