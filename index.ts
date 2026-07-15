@@ -93,6 +93,18 @@ async function run() {
       }
     });
 
+    app.get('/api/products/featured', async (req: Request, res: Response) => {
+      try {
+        const featuredProducts = await productsCollection
+          .find({ isFeatured: true })
+          .limit(6)
+          .toArray();
+        res.send(featuredProducts);
+      } catch (error) {
+        res.status(500).send({ message: 'Failed to fetch featured artifacts' });
+      }
+    });
+
     // A3. Single Artifact Detail
     app.get('/api/products/:id', async (req: Request, res: Response) => {
       try {
@@ -379,8 +391,8 @@ async function run() {
         const id = req.params.id;
         const updatedData = req.body;
         delete updatedData._id;
-         console.log('ID:', req.params.id);
-         console.log('BODY:', req.body);
+        console.log('ID:', req.params.id);
+        console.log('BODY:', req.body);
 
         const filter = { _id: new ObjectId(id) };
         const updateDoc = {
@@ -926,6 +938,8 @@ async function run() {
         }
       },
     );
+
+    // Add this to your index.ts under "A. PRODUCT MANAGEMENT ROUTES"
   } catch (error) {
     console.error('Critical Database Error:', error);
   }
