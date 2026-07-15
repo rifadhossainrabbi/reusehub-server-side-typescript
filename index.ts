@@ -379,6 +379,8 @@ async function run() {
         const id = req.params.id;
         const updatedData = req.body;
         delete updatedData._id;
+         console.log('ID:', req.params.id);
+         console.log('BODY:', req.body);
 
         const filter = { _id: new ObjectId(id) };
         const updateDoc = {
@@ -386,6 +388,7 @@ async function run() {
         };
 
         const result = await productsCollection.updateOne(filter, updateDoc);
+        console.log(result);
 
         if (result.matchedCount > 0) {
           res.send({
