@@ -115,7 +115,7 @@ async function run() {
      */
 
     // A1. Create a New Gadget listing
-    app.post('/api/products', async (req: Request, res: Response) => {
+    app.post('/api/products',verifyToken, async (req: Request, res: Response) => {
       try {
         const product = {
           ...req.body,
@@ -186,7 +186,7 @@ async function run() {
      * D. USER SPECIFIC ANALYTICS (Atomic Aggregation)
      */
     app.get(
-      '/api/dashboard/user-intel/:userId',
+      '/api/dashboard/user-intel/:userId',verifyToken,
       async (req: Request, res: Response) => {
         try {
           const userId = req.params.userId;
@@ -262,7 +262,7 @@ async function run() {
     );
 
     // A3. Single Artifact Detail
-    app.get('/api/products/:id', async (req: Request, res: Response) => {
+    app.get('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
       try {
         const result = await productsCollection.findOne({
           _id: new ObjectId(req.params.id),
@@ -275,7 +275,7 @@ async function run() {
 
     // A4. Related Artifacts
     app.get(
-      '/api/products/related/:category',
+      '/api/products/related/:category',verifyToken,
       async (req: Request, res: Response) => {
         const result = await productsCollection
           .find({ category: req.params.category })
@@ -286,7 +286,7 @@ async function run() {
     );
 
     // A5. Delete Artifact (User Specific)
-    app.delete('/api/products/:id', async (req: Request, res: Response) => {
+    app.delete('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
       const result = await productsCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
@@ -298,7 +298,7 @@ async function run() {
      */
 
     // B1. Toggle Favorite (Add/Remove) with Counter logic
-    app.post('/api/favorites/toggle', async (req: Request, res: Response) => {
+    app.post('/api/favorites/toggle',verifyToken, async (req: Request, res: Response) => {
       try {
         const { userId, productId } = req.body;
         const query = { userId, productId };
@@ -334,7 +334,7 @@ async function run() {
     });
 
     // B2. Get User Wishlist (Dashboard My Favorite Page)
-    app.get('/api/favorites/:userId', async (req: Request, res: Response) => {
+    app.get('/api/favorites/:userId',verifyToken, async (req: Request, res: Response) => {
       try {
         const userId = req.params.userId;
         const result = await favoritesCollection
@@ -348,7 +348,7 @@ async function run() {
     });
 
     // B3. Check Status for Detail Page
-    app.get('/api/favorites/check', async (req: Request, res: Response) => {
+    app.get('/api/favorites/check',verifyToken, async (req: Request, res: Response) => {
       const { userId, productId } = req.query;
       const result = await favoritesCollection.findOne({
         userId: userId as string,
@@ -358,7 +358,7 @@ async function run() {
     });
 
     // B4. Explicit Remove from My Favorite Page
-    app.delete('/api/favorites/:id', async (req: Request, res: Response) => {
+    app.delete('/api/favorites/:id',verifyToken, async (req: Request, res: Response) => {
       const result = await favoritesCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
@@ -370,7 +370,7 @@ async function run() {
      */
 
     // C1. Create Order
-    app.post('/api/orders', async (req: Request, res: Response) => {
+    app.post('/api/orders',verifyToken, async (req: Request, res: Response) => {
       try {
         const { buyerId, sellerId, productId } = req.body;
         if (buyerId === sellerId)
@@ -394,7 +394,7 @@ async function run() {
     });
 
     app.get(
-      '/api/orders/received/:sellerId',
+      '/api/orders/received/:sellerId',verifyToken,
       async (req: Request, res: Response) => {
         res.send(
           await ordersCollection
@@ -406,7 +406,7 @@ async function run() {
     );
 
     app.get(
-      '/api/orders/my-orders/:buyerId',
+      '/api/orders/my-orders/:buyerId',verifyToken,
       async (req: Request, res: Response) => {
         res.send(
           await ordersCollection
@@ -418,7 +418,7 @@ async function run() {
     );
 
     // C4. Update Order Action (Accept/Reject by Seller)
-    app.patch('/api/orders/action/:id', async (req: Request, res: Response) => {
+    app.patch('/api/orders/action/:id',verifyToken, async (req: Request, res: Response) => {
       try {
         const { action } = req.body; // 'accepted' or 'rejected'
         const result = await ordersCollection.updateOne(
@@ -431,7 +431,7 @@ async function run() {
       }
     });
 
-    app.delete('/api/orders/:id', async (req: Request, res: Response) => {
+    app.delete('/api/orders/:id',verifyToken, async (req: Request, res: Response) => {
       res.send(
         await ordersCollection.deleteOne({ _id: new ObjectId(req.params.id) }),
       );
@@ -442,7 +442,7 @@ async function run() {
      */
 
     app.get(
-      '/api/dashboard/stats/:userId',
+      '/api/dashboard/stats/:userId',verifyToken,
       async (req: Request, res: Response) => {
         const userId = req.params.userId;
         const stats = await productsCollection
@@ -489,7 +489,7 @@ async function run() {
     );
 
     app.get(
-      '/api/analytics/user/:userId',
+      '/api/analytics/user/:userId',verifyToken,
       async (req: Request, res: Response) => {
         const stats = await productsCollection
           .find({ 'seller.id': req.params.userId })
@@ -515,7 +515,7 @@ async function run() {
     /**
      * E. USER PROFILE UPDATE (FIXED)
      */
-    app.patch('/api/users/:id', async (req: Request, res: Response) => {
+    app.patch('/api/users/:id',verifyToken, async (req: Request, res: Response) => {
       try {
         const userId = req.params.id;
         const { name, image } = req.body;
@@ -557,7 +557,7 @@ async function run() {
     /**
      * F. MY PRODUCTS (AGGREGATION)
      */
-    app.get('/api/my-products/:userId', async (req: Request, res: Response) => {
+    app.get('/api/my-products/:userId',verifyToken, async (req: Request, res: Response) => {
       const userId = req.params.userId;
       const page = parseInt(req.query.page as string) || 1;
       const limit = 6;
@@ -600,7 +600,7 @@ async function run() {
      * Update an existing Gadget listing
      * URL: PATCH /api/products/:id
      */
-    app.patch('/api/products/:id', async (req: Request, res: Response) => {
+    app.patch('/api/products/:id',verifyToken, async (req: Request, res: Response) => {
       try {
         const id = req.params.id;
         const updatedData = req.body;
@@ -673,7 +673,6 @@ async function run() {
      */
     app.patch(
       '/api/admin/users/toggle-role/:id',
-      verifyToken,
       async (req: Request, res: Response) => {
         try {
           const targetId = req.params.id;
@@ -872,7 +871,7 @@ async function run() {
      */
     app.get(
       '/api/admin/dashboard-stats',
-      verifyToken,
+     
       async (req: Request, res: Response) => {
         try {
           // ---------- 1. BASIC SUMMARY ----------
