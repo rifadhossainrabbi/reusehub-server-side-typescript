@@ -101,6 +101,7 @@ async function run() {
             }
         });
         // A2. Browse Artifacts (Explore Page - Search, Filter, Sort, Pagination)
+        // A2. Browse Artifacts (Explore Page - Search, Filter, Sort, Pagination)
         app.get('/api/products', async (req, res) => {
             try {
                 const { search, category, minPrice, maxPrice, sort, page } = req.query;
@@ -108,6 +109,8 @@ async function run() {
                 const limit = 8;
                 const skip = (pageNum - 1) * limit;
                 let query = {};
+                // ✅ এখানে যোগ করুন - শুধুমাত্র approved প্রোডাক্ট দেখাবে
+                query.status = 'approved';
                 if (search)
                     query.title = { $regex: search, $options: 'i' };
                 if (category && category !== 'All')
@@ -257,65 +260,224 @@ async function run() {
         /**
          * B. FAVORITE (WISHLIST) SYSTEM
          */
-        // B1. Toggle Favorite (Add/Remove) with Counter logic
+        // server/index.ts - শুধুমাত্র Favorite Routes (প্রাসঙ্গিক অংশ)
+        // B1. Toggle Favorite - সব User কে Array তে রাখবে
         app.post('/api/favorites/toggle', verifyToken, async (req, res) => {
             try {
-                const { userId, productId } = req.body;
-                const query = { userId, productId };
-                const existing = await favoritesCollection.findOne(query);
-                if (existing) {
-                    await favoritesCollection.deleteOne(query);
-                    await productsCollection.updateOne({ _id: new ObjectId(productId) }, { $inc: { favoriteCount: -1 } });
-                    res.send({
-                        isFavorited: false,
-                        message: 'Removed from sanctuary wishlist',
+                const { userId, productId, title, imageUrl, price, category } = req.body;
+                if (!userId || !productId) {
+                    return res.status(400).send({
+                        success: false,
+                        message: 'Missing userId or productId',
                     });
+                }
+                const user = await usersCollection.findOne({
+                    _id: new ObjectId(userId),
+                });
+                if (!user) {
+                    return res.status(404).send({
+                        success: false,
+                        message: 'User not found',
+                    });
+                }
+                const product = await productsCollection.findOne({
+                    _id: new ObjectId(productId),
+                });
+                if (!product) {
+                    return res.status(404).send({
+                        success: false,
+                        message: 'Product not found',
+                    });
+                }
+                // Get current favorites array
+                const currentFavorites = product.favorites || [];
+                // Check if user already in array
+                const userIndex = currentFavorites.findIndex((fav) => fav.userId === userId);
+                let isFavorited = false;
+                let updatedFavorites = [];
+                if (userIndex !== -1) {
+                    // Remove user from array
+                    updatedFavorites = currentFavorites.filter((fav) => fav.userId !== userId);
+                    isFavorited = false;
                 }
                 else {
-                    await favoritesCollection.insertOne({
-                        ...req.body,
-                        addedAt: new Date(),
-                    });
-                    await productsCollection.updateOne({ _id: new ObjectId(productId) }, { $inc: { favoriteCount: 1 } });
-                    res.send({
-                        isFavorited: true,
-                        message: 'Artifact preserved in wishlist',
-                    });
+                    // Add user to array
+                    const userFavoriteInfo = {
+                        userId: user._id.toString(),
+                        name: user.name || 'Unknown User',
+                    };
+                    updatedFavorites = [...currentFavorites, userFavoriteInfo];
+                    isFavorited = true;
                 }
+                // Update product with new favorites array
+                await productsCollection.updateOne({ _id: new ObjectId(productId) }, {
+                    $set: {
+                        favorites: updatedFavorites,
+                        favoriteCount: updatedFavorites.length,
+                    },
+                });
+                // Also update favorites collection for backup
+                if (isFavorited) {
+                    await favoritesCollection.updateOne({ userId, productId }, {
+                        $set: {
+                            userId,
+                            productId,
+                            title,
+                            imageUrl,
+                            price,
+                            category,
+                            userName: user.name,
+                            addedAt: new Date(),
+                        },
+                    }, { upsert: true });
+                }
+                else {
+                    await favoritesCollection.deleteOne({ userId, productId });
+                }
+                res.send({
+                    success: true,
+                    isFavorited,
+                    favoriteCount: updatedFavorites.length,
+                    favorites: updatedFavorites, // ✅ Send updated favorites array
+                    message: isFavorited
+                        ? 'Artifact preserved in wishlist'
+                        : 'Removed from sanctuary wishlist',
+                });
             }
             catch (error) {
-                res.status(500).send({ message: 'Wishlist sync failed' });
+                console.error('Toggle favorite error:', error);
+                res.status(500).send({
+                    success: false,
+                    message: 'Wishlist sync failed',
+                });
             }
         });
-        // B2. Get User Wishlist (Dashboard My Favorite Page)
+        // B2. Get User Wishlist
         app.get('/api/favorites/:userId', verifyToken, async (req, res) => {
             try {
                 const userId = req.params.userId;
-                const result = await favoritesCollection
-                    .find({ userId })
-                    .sort({ addedAt: -1 })
+                const products = await productsCollection
+                    .find({
+                    'favorites.userId': userId,
+                })
+                    .project({
+                    _id: 1,
+                    title: 1,
+                    imageUrl: 1,
+                    price: 1,
+                    category: 1,
+                    favorites: 1,
+                    favoriteCount: 1,
+                })
                     .toArray();
-                res.send(result);
+                res.send({
+                    success: true,
+                    products,
+                    total: products.length,
+                });
             }
             catch (error) {
-                res.status(500).send({ message: 'Failed to fetch wishlist' });
+                console.error('Get wishlist error:', error);
+                res.status(500).send({
+                    success: false,
+                    message: 'Failed to fetch wishlist',
+                });
             }
         });
         // B3. Check Status for Detail Page
         app.get('/api/favorites/check', verifyToken, async (req, res) => {
-            const { userId, productId } = req.query;
-            const result = await favoritesCollection.findOne({
-                userId: userId,
-                productId: productId,
-            });
-            res.send({ isFavorited: !!result });
+            try {
+                const { userId, productId } = req.query;
+                if (!userId || !productId) {
+                    return res.status(400).send({
+                        success: false,
+                        isFavorited: false,
+                        message: 'Missing userId or productId',
+                    });
+                }
+                const product = await productsCollection.findOne({
+                    _id: new ObjectId(productId),
+                    'favorites.userId': userId,
+                });
+                res.send({
+                    success: true,
+                    isFavorited: !!product,
+                    favoriteCount: product?.favorites?.length || 0,
+                    favorites: product?.favorites || [],
+                });
+            }
+            catch (error) {
+                console.error('Favorite check error:', error);
+                res.status(500).send({
+                    success: false,
+                    isFavorited: false,
+                    message: 'Failed to check favorite status',
+                });
+            }
         });
-        // B4. Explicit Remove from My Favorite Page
-        app.delete('/api/favorites/:id', verifyToken, async (req, res) => {
-            const result = await favoritesCollection.deleteOne({
-                _id: new ObjectId(req.params.id),
-            });
-            res.send(result);
+        // B4. Delete Favorite (সরাসরি Product থেকে)
+        app.delete('/api/favorites/remove/:productId', verifyToken, async (req, res) => {
+            try {
+                const productId = req.params.productId;
+                const userId = req.user?.id;
+                console.log('🔍 Removing favorite:');
+                console.log('  Product ID:', productId);
+                console.log('  User ID:', userId);
+                if (!userId) {
+                    return res.status(401).send({
+                        success: false,
+                        message: 'Unauthorized',
+                    });
+                }
+                // Check if product exists
+                const product = await productsCollection.findOne({
+                    _id: new ObjectId(productId),
+                });
+                if (!product) {
+                    return res.status(404).send({
+                        success: false,
+                        message: 'Product not found',
+                    });
+                }
+                // Get current favorites array
+                const currentFavorites = product.favorites || [];
+                // Check if user is in favorites
+                const userIndex = currentFavorites.findIndex((fav) => fav.userId === userId);
+                if (userIndex === -1) {
+                    return res.status(404).send({
+                        success: false,
+                        message: 'Favorite not found for this user',
+                    });
+                }
+                // Remove user from favorites array
+                const updatedFavorites = currentFavorites.filter((fav) => fav.userId !== userId);
+                // Update product
+                const result = await productsCollection.updateOne({ _id: new ObjectId(productId) }, {
+                    $set: {
+                        favorites: updatedFavorites,
+                        favoriteCount: updatedFavorites.length,
+                    },
+                });
+                // Also delete from favorites collection if exists
+                await favoritesCollection.deleteOne({
+                    userId,
+                    productId: productId,
+                });
+                console.log('✅ Favorite removed successfully');
+                console.log('  Updated count:', updatedFavorites.length);
+                res.send({
+                    success: true,
+                    message: 'Favorite removed successfully',
+                    favoriteCount: updatedFavorites.length,
+                });
+            }
+            catch (error) {
+                console.error('Delete favorite error:', error);
+                res.status(500).send({
+                    success: false,
+                    message: 'Failed to remove favorite',
+                });
+            }
         });
         /**
          * C. ORDER (PURCHASE REQUEST) SYSTEM
@@ -596,7 +758,7 @@ async function run() {
         /**
          * G2. ROLE TOGGLE (User <-> Admin) - SECURED WITH verifyToken
          */
-        app.patch('/api/admin/users/toggle-role/:id', async (req, res) => {
+        app.patch('/api/admin/users/toggle-role/:id', verifyToken, async (req, res) => {
             try {
                 const targetId = req.params.id;
                 const requesterId = req.user?.id; // মিডলওয়্যার থেকে আইডি নেওয়া হয়েছে
@@ -1068,6 +1230,64 @@ async function run() {
             }
             catch (error) {
                 res.status(500).send({ message: 'Stats error' });
+            }
+        });
+        // server/index.ts - এই route টি যোগ করতে হবে
+        /**
+         * Get all products by a specific seller (author)
+         * URL: /api/products/seller/:sellerId
+         */
+        app.get('/api/products/seller/:sellerId', async (req, res) => {
+            try {
+                const sellerId = req.params.sellerId;
+                const page = parseInt(req.query.page) || 1;
+                const limit = 8;
+                const skip = (page - 1) * limit;
+                // Validate sellerId
+                if (!ObjectId.isValid(sellerId)) {
+                    return res.status(400).send({
+                        success: false,
+                        message: 'Invalid seller ID format',
+                    });
+                }
+                const query = {
+                    'seller.id': sellerId,
+                    status: 'approved',
+                };
+                const products = await productsCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+                const total = await productsCollection.countDocuments(query);
+                // সেলারের তথ্য বের করা
+                const seller = await usersCollection.findOne({
+                    _id: new ObjectId(sellerId),
+                });
+                res.send({
+                    success: true,
+                    products,
+                    totalPages: Math.ceil(total / limit),
+                    currentPage: page,
+                    totalItems: total,
+                    seller: seller
+                        ? {
+                            id: seller._id,
+                            name: seller.name || 'Unknown Seller',
+                            email: seller.email,
+                            image: seller.image || null,
+                            role: seller.role || 'user',
+                        }
+                        : null,
+                });
+            }
+            catch (error) {
+                console.error('Seller products fetch error:', error);
+                res.status(500).send({
+                    success: false,
+                    message: 'Failed to fetch seller artifacts',
+                });
             }
         });
         // Add this to your index.ts under "A. PRODUCT MANAGEMENT ROUTES"
